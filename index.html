@@ -555,7 +555,7 @@ function parseDir(address) {
 // =====================================================================
 //  Inicio de sesión (MSAL.js 2.35.0)
 // =====================================================================
-let app = null, cuenta = null;
+let app = null, cuenta = null, errorLogin = false;
 async function iniciarMsal() {
   if (location.protocol === 'file:') {
     mostrarError('La página debe abrirse desde http:// o https://', 'Microsoft no permite iniciar sesión desde un archivo abierto con doble clic (file://). Ábrala desde su servidor o desde http://localhost (vea la guía de instalación).');
@@ -570,7 +570,11 @@ async function iniciarMsal() {
     const r = await app.handleRedirectPromise();
     if (r && r.account) app.setActiveAccount(r.account);
   } catch (e) {
-    mostrarError('Error al iniciar sesión', (e.errorCode ? e.errorCode + ': ' : '') + (e.errorMessage || e.message));
+    errorLogin = true;
+    const txt = (e.errorCode ? e.errorCode + ': ' : '') + (e.errorMessage || e.message);
+    mostrarError('Error al iniciar sesión', /AADSTS65004/.test(txt)
+      ? 'No se aceptaron los permisos (' + txt + '). Pulse "Iniciar sesión con Microsoft" y, en la ventana "Permisos solicitados", elija Aceptar.'
+      : txt);
     return false;
   }
   cuenta = app.getActiveAccount() || app.getAllAccounts()[0] || null;
@@ -771,9 +775,22 @@ window.addEventListener('DOMContentLoaded', async () => {
   $('auto-on').addEventListener('change', programar);
   $('auto-min').addEventListener('change', programar);
   if (!window.d3) { mostrarError('No se cargó la librería de gráficos (d3)', 'Revise la conexión a cdnjs.cloudflare.com o cdn.jsdelivr.net'); return; }
-  const ok = await iniciarMsal();
+  let ok = await iniciarMsal();
   programar();
-  if (ok) cargar(true);
+  // Inicio de sesión automático: primero en silencio (sesión de Microsoft ya abierta en el navegador);
+  // si no se puede, se va directo a la pantalla de Microsoft una sola vez por pestaña (evita bucles).
+  if (!ok && app && !errorLogin) {
+    try {
+      const r = await app.ssoSilent({ scopes: CONFIG.scopes });
+      if (r && r.account) { app.setActiveAccount(r.account); cuenta = r.account; pintarSesion(); ok = true; }
+    } catch (e) { /* sin sesión silenciosa */ }
+    if (!ok) {
+      let intentado = false;
+      try { intentado = sessionStorage.getItem('ctf-autologin') === '1'; sessionStorage.setItem('ctf-autologin', '1'); } catch (e) { intentado = true; }
+      if (!intentado) { estado('Redirigiendo al inicio de sesión de Microsoft…'); app.loginRedirect({ scopes: CONFIG.scopes }); return; }
+    }
+  }
+  if (ok) { try { sessionStorage.removeItem('ctf-autologin'); } catch (e) { /* sin almacenamiento */ } cargar(true); }
   else estado('Inicie sesión con su cuenta de Naturisa para cargar los datos');
 });
 
